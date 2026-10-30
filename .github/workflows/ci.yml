@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Build and check
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 26
+        run: |
+          xcode="$(ls -d /Applications/Xcode_26*.app | sort -V | tail -n 1)"
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      - name: Build
+        run: |
+          xcodebuild -quiet -project boringNotch.xcodeproj -scheme boringNotch \
+            -configuration Debug -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= build
+
+      - name: Checks
+        run: scripts/check.sh --native

@@ -58,10 +58,8 @@ struct OmpUsageScrollCheck {
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.close() }
-        try await Task.sleep(for: .milliseconds(150))
-        host.layoutSubtreeIfNeeded()
-        guard let codexFrame = accessibilityFrame(in: host, label: "Codex · work"),
-              let claudeFrame = accessibilityFrame(in: host, label: "Claude"),
+        guard let claudeFrame = try await stableFrame(in: host, label: "Claude"),
+              let codexFrame = accessibilityFrame(in: host, label: "Codex · work"),
               let bankedFrame = accessibilityFrame(in: host, label: "Banked resets: 1") else {
             fatalError("Provider headers and banked resets must remain accessible")
         }
@@ -109,14 +107,15 @@ struct OmpUsageScrollCheck {
         await shortStore.refresh()
         let closedSize = vm.notchSize
         host.rootView = usageView(store: shortStore, vm: vm, height: 306)
-        try await Task.sleep(for: .milliseconds(150))
-        host.layoutSubtreeIfNeeded()
+        try await settle(host) { vm.sizeForOpenView(.usage).height < usageNotchSize.height }
         let compactHeight = vm.sizeForOpenView(.usage).height
         assert(compactHeight < usageNotchSize.height, "Short account lists must shrink the panel")
         let chrome = max(openNotchHeaderMinHeight, vm.effectiveClosedNotchHeight) + openNotchSpacing + openNotchPadding
         host.rootView = usageView(store: shortStore, vm: vm, height: compactHeight - chrome)
-        try await Task.sleep(for: .milliseconds(150))
-        host.layoutSubtreeIfNeeded()
+        try await settle(host) {
+            guard let scroll = findScroll(in: host), let document = scroll.documentView else { return false }
+            return abs(scroll.contentView.bounds.height - document.frame.height) <= 1
+        }
         guard let compactScroll = findScroll(in: host), let compactDocument = compactScroll.documentView else {
             fatalError("Compact Usage must retain its scroll viewport")
         }
@@ -130,15 +129,12 @@ struct OmpUsageScrollCheck {
         let soloStore = OmpUsageStore(defaults: defaults, probe: { _, _ in soloSnapshot })
         await soloStore.refresh()
         host.rootView = usageView(store: soloStore, vm: vm, height: compactHeight - chrome)
-        try await Task.sleep(for: .milliseconds(150))
-        host.layoutSubtreeIfNeeded()
-        guard let soloFrame = accessibilityFrame(in: host, label: "Claude") else {
+        guard let soloFrame = try await stableFrame(in: host, label: "Claude", absent: "Codex · personal") else {
             fatalError("Claude must remain visible when Codex has no report")
         }
         assert(abs(soloFrame.minX - claudeFrame.minX) <= 1, "A missing Codex report must not move Claude out of the right column")
         host.rootView = usageView(store: store, vm: vm, height: compactHeight - chrome)
-        try await Task.sleep(for: .milliseconds(150))
-        host.layoutSubtreeIfNeeded()
+        try await settle(host) { vm.sizeForOpenView(.usage).height == usageNotchSize.height }
         assert(vm.sizeForOpenView(.usage).height == usageNotchSize.height, "New rows must grow a previously compact panel")
         assert(vm.notchState == .closed && vm.notchSize == closedSize, "Hidden layout measurement must not open the panel")
         assert(!window.isVisible, "The regression must never open a visible window")
@@ -151,6 +147,30 @@ struct OmpUsageScrollCheck {
             .frame(width: 578, height: height)
             .environmentObject(vm)
             .preferredColorScheme(.dark)
+    }
+
+    /// Lays out until `condition` holds. Fixed sleeps are flaky on cold CI runners.
+    @MainActor
+    static func settle(_ host: NSView, until condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        repeat {
+            try await Task.sleep(for: .milliseconds(50))
+            host.layoutSubtreeIfNeeded()
+        } while !condition() && ContinuousClock.now < deadline
+    }
+
+    /// The labelled element's frame once it is unchanged across two layout passes.
+    @MainActor
+    static func stableFrame(in host: NSView, label: String, absent: String? = nil) async throws -> NSRect? {
+        var previous: NSRect?
+        var current: NSRect?
+        try await settle(host) {
+            previous = current
+            current = accessibilityFrame(in: host, label: label)
+            let gone = absent.map { accessibilityFrame(in: host, label: $0) == nil } ?? true
+            return current != nil && current == previous && gone
+        }
+        return current
     }
 
     @MainActor

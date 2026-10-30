@@ -7,12 +7,15 @@ import SwiftUI
 struct OmpUsageScrollCheck {
     @MainActor
     static func main() async throws {
-        NSApplication.shared.setActivationPolicy(.prohibited)
+        // Pin overlay scroll bars (trackpad default). With a mouse, macOS uses legacy bars that
+        // appear only on overflow and narrow the columns, so measurements would depend on the runner.
         UserDefaults.standard.setVolatileDomain([
             "hudReplacement": false, "showMirror": false,
             "showBatteryIndicator": false, "firstLaunch": false,
-            "hideNotchOption": "never"
+            "hideNotchOption": "never", "AppleShowScrollBars": "WhenScrolling"
         ], forName: UserDefaults.argumentDomain)
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        precondition(NSScroller.preferredScrollerStyle == .overlay, "The layout check needs overlay scroll bars")
         NSApp.finishLaunching()
         let enhanced = NSSelectorFromString("accessibilitySetValue:forAttribute:")
         if NSApp.responds(to: enhanced) {
@@ -132,7 +135,7 @@ struct OmpUsageScrollCheck {
         guard let soloFrame = try await stableFrame(in: host, label: "Claude", absent: "Codex · personal") else {
             fatalError("Claude must remain visible when Codex has no report")
         }
-        assert(abs(soloFrame.minX - claudeFrame.minX) <= 1, "A missing Codex report must not move Claude out of the right column")
+        assert(abs(soloFrame.minX - claudeFrame.minX) <= 1, "A missing Codex report must not move Claude out of the right column: x \(claudeFrame.minX) → \(soloFrame.minX)")
         host.rootView = usageView(store: store, vm: vm, height: compactHeight - chrome)
         try await settle(host) { vm.sizeForOpenView(.usage).height == usageNotchSize.height }
         assert(vm.sizeForOpenView(.usage).height == usageNotchSize.height, "New rows must grow a previously compact panel")

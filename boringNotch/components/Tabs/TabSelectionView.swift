@@ -5,48 +5,37 @@
 //  Created by Hugo Persson on 2024-08-25.
 //
 
+import Defaults
 import SwiftUI
 
-struct TabModel: Identifiable {
-    let id = UUID()
-    let label: String
-    let icon: String
-    let view: NotchViews
-}
-
-let tabs = [
-    TabModel(label: "Home", icon: "house.fill", view: .home),
-    TabModel(label: "Shelf", icon: "tray.fill", view: .shelf)
-]
 
 struct TabSelectionView: View {
     @ObservedObject var coordinator = BoringViewCoordinator.shared
-    @Namespace var animation
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(tabs) { tab in
-                    TabButton(label: tab.label, icon: tab.icon, selected: coordinator.currentView == tab.view) {
-                        withAnimation(.smooth) {
-                            coordinator.currentView = tab.view
-                        }
-                    }
-                    .frame(height: 26)
-                    .foregroundStyle(tab.view == coordinator.currentView ? .white : .gray)
-                    .background {
-                        if tab.view == coordinator.currentView {
-                            Capsule()
-                                .fill(coordinator.currentView == tab.view ? Color(nsColor: .secondarySystemFill) : Color.clear)
-                                .matchedGeometryEffect(id: "capsule", in: animation)
-                        } else {
-                            Capsule()
-                                .fill(coordinator.currentView == tab.view ? Color(nsColor: .secondarySystemFill) : Color.clear)
-                                .matchedGeometryEffect(id: "capsule", in: animation)
-                                .hidden()
-                        }
-                    }
+        Picker("Panel", selection: Binding(
+            get: { coordinator.currentView },
+            set: { view in
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                    coordinator.currentView = view
+                }
             }
+        )) {
+            Text("Home").tag(NotchViews.home)
+            if Defaults[.boringShelf] {
+                Text("Shelf").tag(NotchViews.shelf)
+            }
+            Text("Usage").tag(NotchViews.usage)
+            Text("Timer").tag(NotchViews.timer)
         }
-        .clipShape(Capsule())
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.mini)
+        .font(.system(size: 12))
+        .frame(height: 28)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("Switch between Home, Shelf, Oh My Pi usage and the session timer")
     }
 }
 

@@ -125,6 +125,7 @@ extension CalendarModel {
         self.init(
             id: calendar.calendarIdentifier,
             account: calendar.accountTitle,
+            accountID: calendar.source.sourceIdentifier,
             title: calendar.title,
             color: calendar.color,
             isSubscribed: calendar.isSubscribed || calendar.isDelegate,
@@ -151,7 +152,9 @@ extension EventModel {
             participants: .init(from: event),
             timeZone: calendar.isSubscribed || calendar.isDelegate ? nil : event.timeZone,
             hasRecurrenceRules: event.hasRecurrenceRules || event.isDetached,
-            priority: nil
+            priority: nil,
+            iCalUID: event.calendarItemExternalIdentifier,
+            accountEmail: event.calendarAccountEmail
         )
     }
     
@@ -175,7 +178,9 @@ extension EventModel {
             participants: [],
             timeZone: calendar.isSubscribed || calendar.isDelegate ? nil : reminder.timeZone,
             hasRecurrenceRules: reminder.hasRecurrenceRules,
-            priority: .init(from: reminder.priority)
+            priority: .init(from: reminder.priority),
+            iCalUID: nil,
+            accountEmail: nil
         )
     }
 }
@@ -263,6 +268,15 @@ private extension EKCalendar {
 }
 
 private extension EKEvent {
+    var calendarAccountEmail: String? {
+        let participant = currentUser ?? (organizer?.isCurrentUser == true ? organizer : nil)
+        if let url = participant?.url, url.scheme == "mailto",
+           let email = NotionCalendarLink.validEmail(URLComponents(url: url, resolvingAgainstBaseURL: false)?.path ?? "") {
+            return email
+        }
+        return NotionCalendarLink.validEmail(calendar.source.title)
+    }
+
     var currentUser: EKParticipant? {
         attendees?.first(where: \.isCurrentUser)
     }

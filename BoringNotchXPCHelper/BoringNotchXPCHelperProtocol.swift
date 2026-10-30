@@ -20,12 +20,14 @@ import Foundation
     func isScreenBrightnessAvailable(with reply: @escaping (Bool) -> Void)
     func currentScreenBrightness(with reply: @escaping (NSNumber?) -> Void)
     func setScreenBrightness(_ value: Float, with reply: @escaping (Bool) -> Void)
+    // Fixed read-only usage command; no arbitrary arguments or shell execution.
+    func fetchOmpUsage(_ binaryPath: String, force: Bool, with reply: @escaping (String?, String?) -> Void)
 }
 
 /*
  To use the service from an application or other process, use NSXPCConnection to establish a connection to the service by doing something like this:
 
-     connectionToService = NSXPCConnection(serviceName: "theboringteam.boringnotch.BoringNotchXPCHelper")
+     connectionToService = NSXPCConnection(serviceName: "local.browww.BoringNotchXPCHelper")
      connectionToService.remoteObjectInterface = NSXPCInterface(with: (any BoringNotchXPCHelperProtocol).self)
      connectionToService.resume()
 

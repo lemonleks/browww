@@ -50,7 +50,11 @@ struct ExpandedItem {
 class BoringViewCoordinator: ObservableObject {
     static let shared = BoringViewCoordinator()
 
-    @Published var currentView: NotchViews = .home
+    @Published var currentView: NotchViews = .home {
+        didSet {
+            Defaults[.lastSelectedTab] = currentView
+        }
+    }
     @Published var helloAnimationRunning: Bool = false
     private var sneakPeekDispatch: DispatchWorkItem?
     private var expandingViewDispatch: DispatchWorkItem?
@@ -61,24 +65,7 @@ class BoringViewCoordinator: ObservableObject {
     @AppStorage("musicLiveActivityEnabled") var musicLiveActivityEnabled: Bool = true
     @AppStorage("currentMicStatus") var currentMicStatus: Bool = true
 
-    @AppStorage("alwaysShowTabs") var alwaysShowTabs: Bool = true {
-        didSet {
-            if !alwaysShowTabs {
-                openLastTabByDefault = false
-                if ShelfStateViewModel.shared.isEmpty || !Defaults[.openShelfByDefault] {
-                    currentView = .home
-                }
-            }
-        }
-    }
-
-    @AppStorage("openLastTabByDefault") var openLastTabByDefault: Bool = false {
-        didSet {
-            if openLastTabByDefault {
-                alwaysShowTabs = true
-            }
-        }
-    }
+    @AppStorage("alwaysShowTabs") var alwaysShowTabs: Bool = true
     
     @Default(.hudReplacement) var hudReplacement: Bool
     
@@ -100,8 +87,21 @@ class BoringViewCoordinator: ObservableObject {
     @Published var optionKeyPressed: Bool = true
     private var accessibilityObserver: Any?
     private var hudReplacementCancellable: AnyCancellable?
+    private var shelfEnabledCancellable: AnyCancellable?
 
     private init() {
+        let savedTab = Defaults[.lastSelectedTab]
+        currentView = savedTab == .shelf && !Defaults[.boringShelf] ? .home : savedTab
+        Defaults[.lastSelectedTab] = currentView
+
+        shelfEnabledCancellable = Defaults.publisher(.boringShelf)
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, !Defaults[.boringShelf], self.currentView == .shelf else { return }
+                    self.currentView = .home
+                }
+            }
+
         // Perform migration from name-based to UUID-based storage
         if preferredScreenUUID == nil, let legacyName = legacyPreferredScreenName {
             // Try to find screen by name and migrate to UUID
@@ -172,6 +172,19 @@ class BoringViewCoordinator: ObservableObject {
                     await MediaKeyInterceptor.shared.start(promptIfNeeded: false)
                 }
             }
+        }
+    }
+
+    func selectAdjacentTab(next: Bool) {
+        switch currentView {
+        case .home:
+            if next { currentView = Defaults[.boringShelf] ? .shelf : .usage }
+        case .shelf:
+            currentView = next ? .usage : .home
+        case .usage:
+            currentView = next ? .timer : (Defaults[.boringShelf] ? .shelf : .home)
+        case .timer:
+            if !next { currentView = .usage }
         }
     }
     

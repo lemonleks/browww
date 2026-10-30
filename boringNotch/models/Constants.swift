@@ -30,6 +30,11 @@ enum CalendarSelectionState: Codable, Defaults.Serializable {
     case selected(Set<String>)
 }
 
+enum CalendarApp: String, CaseIterable, Defaults.Serializable {
+    case notion = "Notion Calendar"
+    case apple = "Apple Calendar"
+}
+
 enum HideNotchOption: String, Defaults.Serializable {
     case always
     case nowPlayingOnly
@@ -76,6 +81,7 @@ extension Defaults.Keys {
     static let releaseName = Key<String>("releaseName", default: "Flying Rabbit 🐇🪽")
     
     // MARK: Behavior
+    static let lastSelectedTab = Key<NotchViews>("lastSelectedTab", default: .home)
     static let minimumHoverDuration = Key<TimeInterval>("minimumHoverDuration", default: 0.3)
     static let enableHaptics = Key<Bool>("enableHaptics", default: true)
     static let openNotchOnHover = Key<Bool>("openNotchOnHover", default: true)
@@ -90,13 +96,11 @@ extension Defaults.Keys {
     )
     static let nonNotchHeight = Key<CGFloat>("nonNotchHeight", default: 32)
     static let notchHeight = Key<CGFloat>("notchHeight", default: 32)
-    //static let openLastTabByDefault = Key<Bool>("openLastTabByDefault", default: false)
     static let showOnLockScreen = Key<Bool>("showOnLockScreen", default: false)
     static let hideFromScreenRecording = Key<Bool>("hideFromScreenRecording", default: false)
     
     // MARK: Appearance
     static let showEmojis = Key<Bool>("showEmojis", default: false)
-    //static let alwaysShowTabs = Key<Bool>("alwaysShowTabs", default: true)
     static let showMirror = Key<Bool>("showMirror", default: false)
     static let mirrorShape = Key<MirrorShapeEnum>("mirrorShape", default: MirrorShapeEnum.rectangle)
     static let settingsIconInNotch = Key<Bool>("settingsIconInNotch", default: true)
@@ -164,7 +168,6 @@ extension Defaults.Keys {
     
     // MARK: Shelf
     static let boringShelf = Key<Bool>("boringShelf", default: true)
-    static let openShelfByDefault = Key<Bool>("openShelfByDefault", default: true)
     static let shelfTapToOpen = Key<Bool>("shelfTapToOpen", default: true)
     static let quickShareProvider = Key<String>("quickShareProvider", default: QuickShareProvider.defaultProvider.id)
     static let copyOnDrag = Key<Bool>("copyOnDrag", default: false)
@@ -173,6 +176,8 @@ extension Defaults.Keys {
     
     // MARK: Calendar
     static let calendarSelectionState = Key<CalendarSelectionState>("calendarSelectionState", default: .all)
+    static let calendarApp = Key<CalendarApp>("calendarApp", default: .notion)
+    static let notionCalendarAccountEmails = Key<[String: String]>("notionCalendarAccountEmails", default: [:])
     static let hideAllDayEvents = Key<Bool>("hideAllDayEvents", default: false)
     static let showFullEventTitles = Key<Bool>("showFullEventTitles", default: false)
     static let autoScrollToNextEvent = Key<Bool>("autoScrollToNextEvent", default: true)

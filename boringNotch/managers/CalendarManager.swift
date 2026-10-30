@@ -6,6 +6,7 @@
 //
 
 import Defaults
+import AppKit
 import EventKit
 import SwiftUI
 
@@ -23,6 +24,7 @@ class CalendarManager: ObservableObject {
     @Published var selectedCalendarIDs: Set<String> = []
     @Published var calendarAuthorizationStatus: EKAuthorizationStatus = .notDetermined
     @Published var reminderAuthorizationStatus: EKAuthorizationStatus = .notDetermined
+    @Published var calendarOpenError: String?
     private var selectedCalendars: [CalendarModel] = []
     private let calendarService = CalendarService()
 
@@ -56,11 +58,30 @@ class CalendarManager: ObservableObject {
 
     @MainActor
     func reloadCalendarAndReminderLists() async {
+        calendarAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
+        reminderAuthorizationStatus = EKEventStore.authorizationStatus(for: .reminder)
         let all = await calendarService.calendars()
         self.eventCalendars = all.filter { !$0.isReminder }
         self.reminderLists = all.filter { $0.isReminder }
-        self.allCalendars = all // for legacy compatibility, can be removed if not needed
+        self.allCalendars = all
         updateSelectedCalendars()
+        await updateEvents()
+    }
+
+    func openCalendarApp() {
+        let identifier = Defaults[.calendarApp] == .notion ? "com.cron.electron" : "com.apple.iCal"
+        guard let application = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) else {
+            calendarOpenError = "\(Defaults[.calendarApp].rawValue) is not installed."
+            return
+        }
+        calendarOpenError = nil
+        NSWorkspace.shared.openApplication(at: application, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+            if error != nil {
+                Task { @MainActor in
+                    self?.calendarOpenError = "The calendar could not be opened. Try opening it from Finder."
+                }
+            }
+        }
     }
 
     func checkCalendarAuthorization() async {
@@ -79,20 +100,12 @@ class CalendarManager: ObservableObject {
             self.calendarAuthorizationStatus = granted ? .fullAccess : .denied
             if granted {
                 await reloadCalendarAndReminderLists()
-                events = await calendarService.events(
-                    from: currentWeekStartDate,
-                    to: Calendar.current.date(byAdding: .day, value: 1, to: currentWeekStartDate)!,
-                    calendars: selectedCalendars.map { $0.id })
             }
         case .restricted, .denied:
             NSLog("Calendar access denied or restricted")
         case .fullAccess:
             NSLog("Full access")
             await reloadCalendarAndReminderLists()
-            events = await calendarService.events(
-                from: currentWeekStartDate,
-                to: Calendar.current.date(byAdding: .day, value: 1, to: currentWeekStartDate)!,
-                calendars: selectedCalendars.map { $0.id })
         case .writeOnly:
             NSLog("Write only")
         @unknown default:

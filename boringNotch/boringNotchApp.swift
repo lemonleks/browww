@@ -9,7 +9,6 @@ import AVFoundation
 import Combine
 import Defaults
 import KeyboardShortcuts
-import Sparkle
 import SwiftUI
 
 @main
@@ -18,27 +17,24 @@ struct DynamicNotchApp: App {
     @Default(.menubarIcon) var showMenuBarIcon
     @Environment(\.openWindow) var openWindow
 
-    let updaterController: SPUStandardUpdaterController
-
-    init() {
-        updaterController = SPUStandardUpdaterController(
-            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
-
-        // Initialize the settings window controller with the updater controller
-        SettingsWindowController.shared.setUpdaterController(updaterController)
-    }
 
     var body: some Scene {
-        MenuBarExtra("boring.notch", systemImage: "sparkle", isInserted: $showMenuBarIcon) {
+        MenuBarExtra("Browww", systemImage: "sparkle", isInserted: $showMenuBarIcon) {
+            Button("Oh My Pi Usage") {
+                appDelegate.showPanel(.usage)
+            }
+            Button("Session Timer") {
+                appDelegate.showPanel(.timer)
+            }
+            Divider()
             Button("Settings") {
                 DispatchQueue.main.async {
                     SettingsWindowController.shared.showWindow()
                 }
             }
             .keyboardShortcut(KeyEquivalent(","), modifiers: .command)
-            CheckForUpdatesView(updater: updaterController.updater)
             Divider()
-            Button("Restart Boring Notch") {
+            Button("Restart Browww") {
                 ApplicationRelauncher.restart()
             }
             Button("Quit", role: .destructive) {
@@ -82,6 +78,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DistributedNotificationCenter.default().removeObserver(observer)
             screenUnlockedObserver = nil
         }
+        OmpUsageStore.shared.stopMonitoring()
         MusicManager.shared.destroy()
         cleanupDragDetectors()
         cleanupWindows()
@@ -195,23 +192,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupDragDetectorForScreen(_ screen: NSScreen) {
         guard let uuid = screen.displayUUID else { return }
         
-        let screenFrame = screen.frame
-        let notchHeight = openNotchSize.height
-        let notchWidth = openNotchSize.width
+        guard let viewModel = Defaults[.showOnAllDisplays] ? viewModels[uuid] : vm else { return }
+        let detector = DragDetector(notchRegion: DragDetector.activationRegion(
+            in: screen.frame, notchSize: viewModel.closedNotchSize
+        ))
         
-        // Create notch region at the top-center of the screen where an open notch would occupy
-        let notchRegion = CGRect(
-            x: screenFrame.midX - notchWidth / 2,
-            y: screenFrame.maxY - notchHeight,
-            width: notchWidth,
-            height: notchHeight
-        )
-        
-        let detector = DragDetector(notchRegion: notchRegion)
-        
-        detector.onDragEntersNotchRegion = { [weak self] in
+        detector.onDragEntersNotchRegion = { [weak viewModel] in
             Task { @MainActor in
-                self?.handleDragEntersNotchRegion(onScreen: screen)
+                guard Defaults[.boringShelf] else { return }
+                viewModel?.expandedDragTargeting = true
+            }
+        }
+        detector.onDragExitsNotchRegion = { [weak viewModel] in
+            Task { @MainActor in
+                viewModel?.expandedDragTargeting = false
+            }
+        }
+        detector.onDragEnded = { [weak viewModel] in
+            Task { @MainActor in
+                viewModel?.clearDropTargeting()
             }
         }
         
@@ -219,17 +218,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         detector.startMonitoring()
     }
 
-    private func handleDragEntersNotchRegion(onScreen screen: NSScreen) {
-        guard let uuid = screen.displayUUID else { return }
-        
-        if Defaults[.showOnAllDisplays], let viewModel = viewModels[uuid] {
-            viewModel.open()
-            coordinator.currentView = .shelf
-        } else if !Defaults[.showOnAllDisplays], let windowScreen = window?.screen, screen == windowScreen {
-            vm.open()
-            coordinator.currentView = .shelf
-        }
-    }
 
     private func createBoringNotchWindow(for screen: NSScreen, with viewModel: BoringViewModel) -> NSWindow {
         let rect = NSRect(x: 0, y: 0, width: windowSize.width, height: windowSize.height)
@@ -279,7 +267,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.alphaValue = 1
     }
 
+    @MainActor
+    func showPanel(_ view: NotchViews) {
+        closeNotchTask?.cancel()
+        closeNotchTask = nil
+        let viewModel = viewModels[coordinator.selectedScreenUUID] ?? vm
+        coordinator.currentView = view
+        viewModel.open()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        OmpUsageStore.shared.startMonitoring()
 
         NotificationCenter.default.addObserver(
             self,

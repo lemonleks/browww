@@ -18,6 +18,20 @@ enum PanDirection {
     func signed(deltaX: CGFloat, deltaY: CGFloat) -> CGFloat { (isHorizontal ? deltaX : deltaY) * sign }
 }
 
+@MainActor
+func shouldHandleNotchScroll(at locationInWindow: NSPoint, in view: NSView) -> Bool {
+    guard let contentView = view.window?.contentView,
+          view.bounds.contains(view.convert(locationInWindow, from: nil)) else { return false }
+
+    let point = contentView.superview?.convert(locationInWindow, from: nil) ?? locationInWindow
+    var target = contentView.hitTest(point)
+    while let candidate = target {
+        if candidate is NSScrollView { return false }
+        target = candidate.superview
+    }
+    return true
+}
+
 extension View {
     func panGesture(direction: PanDirection, threshold: CGFloat = 4, action: @escaping (CGFloat, NSEvent.Phase) -> Void) -> some View {
         self
@@ -31,6 +45,10 @@ extension View {
                     .onEnded { _ in action(0, .ended) }
             )
             .background(ScrollMonitor(direction: direction, threshold: threshold, action: action))
+    }
+
+    func tabScrollGesture(enabled: Bool, threshold: CGFloat, action: @escaping (PanDirection) -> Void) -> some View {
+        background(TabScrollMonitor(enabled: enabled, threshold: threshold, action: action))
     }
 }
 
@@ -87,7 +105,8 @@ private struct ScrollMonitor: NSViewRepresentable {
         func installMonitor(on view: NSView) {
             removeMonitor()
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self, weak view] event in
-                guard let self = self, event.window === view?.window else { return event }
+                guard let self, let view, event.window === view.window,
+                      shouldHandleNotchScroll(at: event.locationInWindow, in: view) else { return event }
                 self.handleScroll(event)
                 return event
             }
@@ -140,6 +159,124 @@ private struct ScrollMonitor: NSViewRepresentable {
             }
             // Schedule a timeout to end the gesture if no further scroll events arrive.
             scheduleEndTimeout()
+        }
+    }
+}
+
+struct TabScrollGestureState {
+    private var accepted = false
+    private var movement = CGSize.zero
+    private var axis: Axis?
+    private var switched = false
+    private var consumesMomentum = false
+
+    mutating func reset() { self = Self() }
+
+    mutating func handle(
+        delta: CGSize, phase: NSEvent.Phase, momentumPhase: NSEvent.Phase,
+        inside: Bool, naturalScrolling: Bool, threshold: CGFloat
+    ) -> (consume: Bool, direction: PanDirection?) {
+        if !momentumPhase.isEmpty {
+            let consume = inside && consumesMomentum
+            if momentumPhase.contains(.ended) || momentumPhase.contains(.cancelled) { reset() }
+            return (consume, nil)
+        }
+        if phase.contains(.began) {
+            reset()
+            accepted = inside
+        }
+        if phase.contains(.ended) || phase.contains(.cancelled) {
+            let horizontal = accepted && axis == .horizontal
+            reset()
+            consumesMomentum = horizontal && !phase.contains(.cancelled)
+            return (inside && horizontal, nil)
+        }
+        guard accepted, inside, !phase.isEmpty else { return (false, nil) }
+        if axis == .vertical { return (false, nil) }
+        if switched { return (true, nil) }
+
+        movement.width += delta.width
+        movement.height += delta.height
+        let x = abs(movement.width)
+        let y = abs(movement.height)
+        if axis == nil {
+            if x >= 4 && x >= y * 1.5 { axis = .horizontal }
+            else if y >= 4 && y >= x * 1.5 { axis = .vertical }
+        }
+        guard axis == .horizontal else { return (false, nil) }
+        guard x >= max(4, threshold) else { return (true, nil) }
+
+        switched = true
+        // Follow finger direction, not the user's reversed scrolling preference.
+        let fingerMovement = movement.width * (naturalScrolling ? 1 : -1)
+        return (true, fingerMovement < 0 ? .left : .right)
+    }
+}
+
+private struct TabScrollMonitor: NSViewRepresentable {
+    let enabled: Bool
+    let threshold: CGFloat
+    let action: (PanDirection) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(enabled: enabled, threshold: threshold, action: action) }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.install(on: view)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.configure(enabled: enabled, threshold: threshold, action: action)
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.removeMonitor() }
+
+    @MainActor final class Coordinator {
+        private var enabled: Bool
+        private var threshold: CGFloat
+        private var action: (PanDirection) -> Void
+        private var monitor: Any?
+        private var state = TabScrollGestureState()
+
+        init(enabled: Bool, threshold: CGFloat, action: @escaping (PanDirection) -> Void) {
+            self.enabled = enabled
+            self.threshold = threshold
+            self.action = action
+        }
+
+        func configure(enabled: Bool, threshold: CGFloat, action: @escaping (PanDirection) -> Void) {
+            self.enabled = enabled
+            self.threshold = threshold
+            self.action = action
+            if !enabled { state.reset() }
+        }
+
+        func install(on view: NSView) {
+            removeMonitor()
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self, weak view] event in
+                guard let self, let view, self.enabled, event.hasPreciseScrollingDeltas else { return event }
+                let inside = view.window != nil && event.window === view.window
+                    && view.bounds.contains(view.convert(event.locationInWindow, from: nil))
+                let result = self.state.handle(
+                    delta: CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY),
+                    phase: event.phase, momentumPhase: event.momentumPhase,
+                    inside: inside, naturalScrolling: event.isDirectionInvertedFromDevice,
+                    threshold: self.threshold
+                )
+                if let direction = result.direction { self.action(direction) }
+                return result.consume ? nil : event
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            state.reset()
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
         }
     }
 }

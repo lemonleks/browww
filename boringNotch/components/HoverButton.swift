@@ -8,38 +8,43 @@
 import SwiftUI
 
 struct HoverButton: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var icon: String
+    var label: String
+    var help: String
+    var value: String?
     var iconColor: Color = .primary
     var scale: Image.Scale = .medium
     var action: () -> Void
-    var contentTransition: ContentTransition = .symbolEffect;
-    
+
     @State private var isHovering = false
 
     var body: some View {
         let size = CGFloat(scale == .large ? 40 : 30)
-        
+
         Button(action: action) {
-            Rectangle()
-                .fill(.clear)
-                .contentShape(Rectangle())
+            Image(systemName: icon)
+                .font(scale == .large ? .title3.weight(.semibold) : .body.weight(.medium))
+                .foregroundStyle(iconColor)
                 .frame(width: size, height: size)
-                .overlay {
-                    Capsule()
-                        .fill(isHovering ? Color.gray.opacity(0.2) : .clear)
-                        .frame(width: size, height: size)
-                        .overlay {
-                            Image(systemName: icon)
-                                .foregroundColor(iconColor)
-                                .contentTransition(contentTransition)
-                                .font(scale == .large ? .largeTitle : .body)
-                        }
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovering ? Color.primary.opacity(0.12) : .clear)
                 }
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(label)
+        .accessibilityValue(value ?? "")
         .onHover { hovering in
-            withAnimation(.smooth(duration: 0.3)) {
+            if reduceMotion {
                 isHovering = hovering
+            } else {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isHovering = hovering
+                }
             }
         }
     }

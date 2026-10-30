@@ -16,7 +16,6 @@ struct FileShareView: View {
     @Default(.quickShareProvider) var quickShareProvider: String
 
     @State private var hostView: NSView?
-    @State private var interactionNonce: UUID = .init()
     @State private var isProcessing = false
     
     private var selectedProvider: QuickShareProvider {
@@ -24,85 +23,74 @@ struct FileShareView: View {
     }
 
     var body: some View {
-        dropArea
+        Button {
+            Task { await handleClick() }
+        } label: {
+            Self.dropArea(provider: selectedProvider, isTargeted: vm.dropZoneTargeting, isProcessing: isProcessing || quickShare.isPickerOpen)
+        }
+            .buttonStyle(.plain)
             .background(NSViewHost(view: $hostView))
             .onDrop(of: [.fileURL, .url, .utf8PlainText, .plainText, .data, .image], isTargeted: $vm.dropZoneTargeting) { providers in
-                interactionNonce = .init()
                 vm.dropEvent = true
                 Task { await handleDrop(providers) }
                 return true
             }
-            .onTapGesture {
-                Task {
-                    await handleClick()
-                }
-            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Share files")
+            .accessibilityHint("Drop files here or click to choose files for \(selectedProvider.id).")
+            .help("Drop files here or click to choose files to share")
     }
 
-    private var dropArea: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(
-                    LinearGradient(colors: [Color.black.opacity(0.35), Color.black.opacity(0.20)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(
-                            vm.dropZoneTargeting
-                                ? Color.accentColor.opacity(0.9)
-                                : Color.white.opacity(0.1),
-                            style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [10])
-                        )
-                )
-                .shadow(color: Color.black.opacity(0.6), radius: 6, x: 0, y: 2)
-
-            // Content
-            VStack(spacing: 5) {
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(
-                            vm.dropZoneTargeting ? 0.11 : 0.09
-                        ))
-                        .frame(width: 55, height: 55)
-                    Image(systemName: "square.and.arrow.up")
-                    Group {
-                        if let imgData = selectedProvider.imageData, let nsImg = NSImage(data: imgData) {
-                            Image(nsImage: nsImg)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                        } else {
-                            Image(systemName: "square.and.arrow.up")
-                        }
-                    }
-                    .frame(width: 34, height: 34)
-                        .foregroundStyle(
-                            vm.dropZoneTargeting ? Color.accentColor : Color.gray
-                        )
-                        .scaleEffect(
-                            vm.dropZoneTargeting ? 1.06 : 1.0
-                        )
-                        .animation(.spring(response: 0.36, dampingFraction: 0.7), value: vm.dropZoneTargeting)
+    static func dropArea(provider: QuickShareProvider, isTargeted: Bool, isProcessing: Bool) -> some View {
+        ShelfDropSurface(isTargeted: isTargeted) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    providerIcon(for: provider, isTargeted: isTargeted)
+                    Text("Share")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(isTargeted ? Color.accentColor : .primary)
                 }
 
-                Text(selectedProvider.id)
-                    .font(.system(.headline, design: .rounded))
-                    .foregroundColor(.white.opacity(0.8))
+                Text("Drop files here\nor click to choose.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
 
+                Text(provider.id)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(18)
-            
-            // Loading overlay
-            if isProcessing || quickShare.isPickerOpen {
-                RoundedRectangle(cornerRadius: 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .overlay {
+            if isProcessing {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(.black.opacity(0.3))
-                    .overlay(
+                    .overlay {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                             .scaleEffect(0.8)
-                    )
+                    }
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private static func providerIcon(for provider: QuickShareProvider, isTargeted: Bool) -> some View {
+        if let imageData = provider.imageData, let image = NSImage(data: imageData) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 20, height: 20)
+        } else {
+            Image(systemName: "square.and.arrow.up")
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
+                .frame(width: 20, height: 20)
+        }
     }
 
     // MARK: - Actions

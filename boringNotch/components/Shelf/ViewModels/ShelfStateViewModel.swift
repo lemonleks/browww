@@ -6,6 +6,7 @@
 
 import Foundation
 import AppKit
+import Defaults
 
 @MainActor
 final class ShelfStateViewModel: ObservableObject {
@@ -82,9 +83,12 @@ final class ShelfStateViewModel: ObservableObject {
         isLoading = true
         Task { [weak self] in
             let dropped = await ShelfDropService.items(from: providers)
-            await MainActor.run {
-                self?.add(dropped)
-                self?.isLoading = false
+            guard let self else { return }
+            let previousCount = self.items.count
+            self.add(dropped)
+            self.isLoading = false
+            if self.items.count > previousCount && Defaults[.boringShelf] {
+                BoringViewCoordinator.shared.currentView = .shelf
             }
         }
     }

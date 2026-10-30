@@ -35,6 +35,17 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
             reply(AXIsProcessTrusted())
         }
     }
+    @objc func fetchOmpUsage(_ binaryPath: String, force: Bool, with reply: @escaping (String?, String?) -> Void) {
+        Task {
+            do {
+                let output = try await OmpUsageProcess.fetch(binaryPath: binaryPath, force: force)
+                reply(output, nil)
+            } catch {
+                reply(nil, error.localizedDescription)
+            }
+        }
+    }
+
     
     private class KeyboardBrightnessClient {
         private static let keyboardID: UInt64 = 1

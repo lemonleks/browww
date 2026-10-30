@@ -23,6 +23,7 @@ struct ContentView: View {
     @ObservedObject var batteryModel = BatteryStatusViewModel.shared
     @ObservedObject var brightnessManager = BrightnessManager.shared
     @ObservedObject var volumeManager = VolumeManager.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hoverTask: Task<Void, Never>?
     @State private var isHovering: Bool = false
     @State private var anyDropDebounceTask: Task<Void, Never>?
@@ -38,7 +39,7 @@ struct ContentView: View {
     @Default(.showNotHumanFace) var showNotHumanFace
 
     // Shared interactive spring for movement/resizing to avoid conflicting animations
-    private let animationSpring = Animation.interactiveSpring(response: 0.38, dampingFraction: 0.8, blendDuration: 0)
+    private let animationSpring = Animation.interactiveSpring(response: 0.28, dampingFraction: 0.9, blendDuration: 0)
 
     private let extendedHoverPadding: CGFloat = 30
     private let zeroHeightHoverPadding: CGFloat = 10
@@ -99,18 +100,13 @@ struct ContentView: View {
                         ? (cornerRadiusInsets.opened.top) : (cornerRadiusInsets.opened.bottom)
                         : cornerRadiusInsets.closed.bottom
                     )
-                    .padding([.horizontal, .bottom], vm.notchState == .open ? 12 : 0)
-                    .background(.black)
+                    .padding([.horizontal, .bottom], vm.notchState == .open ? openNotchPadding : 0)
+                    .frame(height: vm.notchState == .open ? vm.notchSize.height : nil, alignment: .top)
+                    .background(Color.black)
                     .clipShape(currentNotchShape)
-                    .overlay(alignment: .top) {
-                        Rectangle()
-                            .fill(.black)
-                            .frame(height: 1)
-                            .padding(.horizontal, topCornerRadius)
-                    }
                     .shadow(
                         color: ((vm.notchState == .open || isHovering) && Defaults[.enableShadow])
-                            ? .black.opacity(0.7) : .clear, radius: Defaults[.cornerRadiusScaling] ? 6 : 4
+                            ? .black.opacity(0.4) : .clear, radius: 12, x: 0, y: 6
                     )
                     .padding(
                         .bottom,
@@ -118,14 +114,13 @@ struct ContentView: View {
                     )
                 
                 mainLayout
-                    .frame(height: vm.notchState == .open ? vm.notchSize.height : nil)
                     .conditionalModifier(true) { view in
                         let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
                         let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
                         
                         return view
-                            .animation(vm.notchState == .open ? openAnimation : closeAnimation, value: vm.notchState)
-                            .animation(.smooth, value: gestureProgress)
+                            .animation(reduceMotion ? nil : (vm.notchState == .open ? openAnimation : closeAnimation), value: vm.notchState)
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: gestureProgress)
                     }
                     .contentShape(Rectangle())
                     .onHover { hovering in
@@ -146,14 +141,25 @@ struct ContentView: View {
                                 handleUpGesture(translation: translation, phase: phase)
                             }
                     }
+                    .tabScrollGesture(
+                        enabled: vm.notchState == .open && Defaults[.enableGestures],
+                        threshold: Defaults[.gestureSensitivity] / 8
+                    ) { direction in
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                            coordinator.selectAdjacentTab(next: direction == .left)
+                        }
+                    }
                     .onReceive(NotificationCenter.default.publisher(for: .sharingDidFinish)) { _ in
-                        if vm.notchState == .open && !isHovering && !vm.isBatteryPopoverActive {
+                        if !vm.anyDropZoneTargeting {
+                            vm.isShelfDragPreviewing = false
+                        }
+                        if vm.notchState == .open && !isHovering && !vm.isBatteryPopoverActive && !vm.isEditingUsageConfiguration {
                             hoverTask?.cancel()
                             hoverTask = Task {
                                 try? await Task.sleep(for: .milliseconds(100))
                                 guard !Task.isCancelled else { return }
                                 await MainActor.run {
-                                    if self.vm.notchState == .open && !self.isHovering && !self.vm.isBatteryPopoverActive && !SharingStateManager.shared.preventNotchClose {
+                                    if self.vm.notchState == .open && !self.isHovering && !self.vm.isBatteryPopoverActive && !self.vm.isEditingUsageConfiguration && !SharingStateManager.shared.preventNotchClose {
                                         self.vm.close()
                                     }
                                 }
@@ -166,20 +172,33 @@ struct ContentView: View {
                                 isHovering = false
                             }
                         }
+                        if newState == .closed,
+                           let panel = NSApp.keyWindow as? BoringNotchSkyLightWindow,
+                           panel.screen?.displayUUID == vm.screenUUID {
+                            panel.resignKey()
+                        }
                     }
                     .onChange(of: vm.isBatteryPopoverActive) {
-                        if !vm.isBatteryPopoverActive && !isHovering && vm.notchState == .open && !SharingStateManager.shared.preventNotchClose {
+                        if !vm.isBatteryPopoverActive && !vm.isEditingUsageConfiguration && !isHovering && vm.notchState == .open && !SharingStateManager.shared.preventNotchClose {
                             hoverTask?.cancel()
                             hoverTask = Task {
                                 try? await Task.sleep(for: .milliseconds(100))
                                 guard !Task.isCancelled else { return }
                                 await MainActor.run {
-                                    if !self.vm.isBatteryPopoverActive && !self.isHovering && self.vm.notchState == .open && !SharingStateManager.shared.preventNotchClose {
+                                    if !self.vm.isBatteryPopoverActive && !self.vm.isEditingUsageConfiguration && !self.isHovering && self.vm.notchState == .open && !SharingStateManager.shared.preventNotchClose {
                                         self.vm.close()
                                     }
                                 }
                             }
                         }
+                    }
+                    .onChange(of: vm.isEditingUsageConfiguration) { _, isEditing in
+                        if !isEditing && !isHovering {
+                            handleHover(false)
+                        }
+                    }
+                    .onExitCommand {
+                        vm.close()
                     }
                     .sensoryFeedback(.alignment, trigger: haptics)
                     .contextMenu {
@@ -210,16 +229,20 @@ struct ContentView: View {
             y: gestureScale,
             anchor: .top
         )
-        .animation(.smooth, value: gestureProgress)
-        .background(dragDetector)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: gestureProgress)
+        .background(dragDetector, alignment: .top)
         .preferredColorScheme(.dark)
         .environmentObject(vm)
         .onChange(of: vm.anyDropZoneTargeting) { _, isTargeted in
             anyDropDebounceTask?.cancel()
 
             if isTargeted {
+                guard Defaults[.boringShelf] else {
+                    vm.dropEvent = false
+                    return
+                }
+                vm.isShelfDragPreviewing = true
                 if vm.notchState == .closed {
-                    coordinator.currentView = .shelf
                     doOpen()
                 }
                 return
@@ -229,22 +252,21 @@ struct ContentView: View {
                 try? await Task.sleep(for: .milliseconds(500))
                 guard !Task.isCancelled else { return }
 
-                if vm.dropEvent {
-                    vm.dropEvent = false
-                    return
-                }
-
+                let didDrop = vm.dropEvent
                 vm.dropEvent = false
-                if !SharingStateManager.shared.preventNotchClose {
-                    vm.close()
-                }
+                guard !vm.anyDropZoneTargeting,
+                      !vm.isBatteryPopoverActive,
+                      !vm.isEditingUsageConfiguration,
+                      !SharingStateManager.shared.preventNotchClose else { return }
+                if didDrop && vm.isMouseHovering() { return }
+                vm.close()
             }
         }
     }
 
     @ViewBuilder
     func NotchLayout() -> some View {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: openNotchSpacing) {
             VStack(alignment: .leading) {
                 if coordinator.helloAnimationRunning {
                     Spacer()
@@ -294,7 +316,7 @@ struct ContentView: View {
                           BoringFaceAnimation()
                        } else if vm.notchState == .open {
                            BoringHeader()
-                               .frame(height: max(24, vm.effectiveClosedNotchHeight))
+                               .frame(height: max(openNotchHeaderMinHeight, vm.effectiveClosedNotchHeight))
                                .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
                        } else {
                            Rectangle().fill(.clear).frame(width: vm.closedNotchSize.width - 20, height: vm.effectiveClosedNotchHeight)
@@ -343,18 +365,27 @@ struct ContentView: View {
               }
               .zIndex(2)
             if vm.notchState == .open {
-                VStack {
-                    switch coordinator.currentView {
+                VStack(alignment: .leading, spacing: 0) {
+                    switch vm.displayedView {
                     case .home:
                         NotchHomeView(albumArtNamespace: albumArtNamespace)
                     case .shelf:
-                        ShelfView()
+                        if Defaults[.boringShelf] {
+                            ShelfView()
+                        } else {
+                            NotchHomeView(albumArtNamespace: albumArtNamespace)
+                        }
+                    case .usage:
+                        OmpUsageView()
+                    case .timer:
+                        SessionTimerView()
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .transition(
-                    .scale(scale: 0.8, anchor: .top)
-                    .combined(with: .opacity)
-                    .animation(.smooth(duration: 0.35))
+                    reduceMotion
+                        ? .opacity
+                        : .opacity.animation(.easeOut(duration: 0.18))
                 )
                 .zIndex(1)
                 .allowsHitTesting(vm.notchState == .open)
@@ -490,7 +521,7 @@ struct ContentView: View {
     var dragDetector: some View {
         if Defaults[.boringShelf] && vm.notchState == .closed {
             Color.clear
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: vm.closedNotchSize.width, height: vm.effectiveClosedNotchHeight)
                 .contentShape(Rectangle())
         .onDrop(of: [.fileURL, .url, .utf8PlainText, .plainText, .data], isTargeted: $vm.dragDetectorTargeting) { providers in
             vm.dropEvent = true
@@ -549,7 +580,7 @@ struct ContentView: View {
                         self.isHovering = false
                     }
                     
-                    if self.vm.notchState == .open && !self.vm.isBatteryPopoverActive && !SharingStateManager.shared.preventNotchClose {
+                    if self.vm.notchState == .open && !self.vm.anyDropZoneTargeting && !self.vm.isBatteryPopoverActive && !self.vm.isEditingUsageConfiguration && !SharingStateManager.shared.preventNotchClose {
                         self.vm.close()
                     }
                 }

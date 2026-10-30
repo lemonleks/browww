@@ -8,6 +8,9 @@
 //
 
 import Foundation
+#if !CALENDAR_STANDALONE_CHECKS
+import Defaults
+#endif
 
 struct EventModel: Equatable, Identifiable {
     let id: String
@@ -24,6 +27,8 @@ struct EventModel: Equatable, Identifiable {
     let timeZone: TimeZone?
     let hasRecurrenceRules: Bool
     let priority: Priority?
+    let iCalUID: String?
+    let accountEmail: String?
 }
 
 enum AttendanceStatus: Comparable {
@@ -82,7 +87,32 @@ extension EventModel {
 
     var isMeeting: Bool { !participants.isEmpty }
 
+
+    #if !CALENDAR_STANDALONE_CHECKS
+    private var notionAccountEmail: String? {
+        let configured = Defaults[.notionCalendarAccountEmails][calendar.accountID] ?? ""
+        return NotionCalendarLink.validEmail(configured) ?? accountEmail
+    }
+
+    var calendarAppName: String {
+        if type.isReminder { return "Reminders" }
+        if Defaults[.calendarApp] == .notion, notionAccountEmail != nil, iCalUID?.isEmpty == false {
+            return "Notion Calendar"
+        }
+        return "Apple Calendar"
+    }
+    #endif
     func calendarAppURL() -> URL? {
+        #if !CALENDAR_STANDALONE_CHECKS
+        if !type.isReminder, Defaults[.calendarApp] == .notion,
+           let email = notionAccountEmail, let iCalUID,
+           let link = NotionCalendarLink.eventURL(
+               accountEmail: email, iCalUID: iCalUID, start: start, end: end,
+               isAllDay: isAllDay, timeZone: timeZone ?? .current, title: title
+           ) {
+            return link
+        }
+        #endif
 
         guard let id = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
             return nil
@@ -122,4 +152,37 @@ enum Priority {
     case high
     case medium
     case low
+}
+
+enum NotionCalendarLink {
+    static func validEmail(_ value: String) -> String? {
+        let email = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = email.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[0].isEmpty, parts[1].contains("."),
+              !email.contains(where: \.isWhitespace) else { return nil }
+        return email
+    }
+
+    static func eventURL(
+        accountEmail: String, iCalUID: String, start: Date, end: Date,
+        isAllDay: Bool, timeZone: TimeZone, title: String
+    ) -> URL? {
+        guard let email = validEmail(accountEmail), !iCalUID.isEmpty, end >= start else { return nil }
+        let dateStyle = Date.ISO8601FormatStyle(timeZone: timeZone)
+            .year().month().day().dateSeparator(.dash)
+        var components = URLComponents()
+        components.scheme = "cron"
+        components.host = "showEvent"
+        components.queryItems = [
+            URLQueryItem(name: "accountEmail", value: email),
+            URLQueryItem(name: "iCalUID", value: iCalUID),
+            URLQueryItem(name: "startDate", value: isAllDay ? start.formatted(dateStyle) : start.formatted(.iso8601)),
+            URLQueryItem(name: "endDate", value: isAllDay ? end.formatted(dateStyle) : end.formatted(.iso8601)),
+            URLQueryItem(name: "title", value: title),
+            URLQueryItem(name: "ref", value: "local.browww")
+        ]
+        // Query parsers treat a literal plus as a space; preserve aliases and UIDs.
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return components.url
+    }
 }

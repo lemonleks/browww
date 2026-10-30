@@ -10,7 +10,6 @@ import Defaults
 import EventKit
 import KeyboardShortcuts
 import LaunchAtLogin
-import Sparkle
 import SwiftUI
 import SwiftUIIntrospect
 
@@ -18,11 +17,10 @@ struct SettingsView: View {
     @State private var selectedTab = "General"
     @State private var accentColorUpdateTrigger = UUID()
 
-    let updaterController: SPUStandardUpdaterController?
-
-    init(updaterController: SPUStandardUpdaterController? = nil) {
-        self.updaterController = updaterController
+    init(initialTab: String = "General") {
+        _selectedTab = State(initialValue: initialTab)
     }
+
 
     var body: some View {
         NavigationSplitView {
@@ -92,15 +90,7 @@ struct SettingsView: View {
                 case "Advanced":
                     Advanced()
                 case "About":
-                    if let controller = updaterController {
-                        About(updaterController: controller)
-                    } else {
-                        // Fallback with a default controller
-                        About(
-                            updaterController: SPUStandardUpdaterController(
-                                startingUpdater: false, updaterDelegate: nil,
-                                userDriverDelegate: nil))
-                    }
+                    About()
                 default:
                     GeneralSettings()
                 }
@@ -286,8 +276,6 @@ struct GeneralSettings: View {
             }
                 .disabled(!openNotchOnHover)
             if enableGestures {
-                Toggle("Change media with horizontal gestures", isOn: .constant(false))
-                    .disabled(true)
                 Defaults.Toggle(key: .closeGestureEnabled) {
                     Text("Close gesture")
                 }
@@ -310,7 +298,7 @@ struct GeneralSettings: View {
             }
         } footer: {
             Text(
-                "Two-finger swipe up on notch to close, two-finger swipe down on notch to open when **Open notch on hover** option is disabled"
+                "Swipe left or right with two fingers inside the open panel to switch tabs. Vertical scrolling in lists is unchanged. Swipe up on the notch to close, or down to open when **Open notch on hover** is disabled."
             )
             .multilineTextAlignment(.trailing)
             .foregroundStyle(.secondary)
@@ -327,7 +315,6 @@ struct GeneralSettings: View {
             Defaults.Toggle(key: .enableHaptics) {
                     Text("Enable haptic feedback")
             }
-            Toggle("Remember last tab", isOn: $coordinator.openLastTabByDefault)
             if openNotchOnHover {
                 Slider(value: $minimumHoverDuration, in: 0...1, step: 0.1) {
                     HStack {
@@ -713,6 +700,14 @@ struct CalendarSettings: View {
     @Default(.hideCompletedReminders) var hideCompletedReminders
     @Default(.hideAllDayEvents) var hideAllDayEvents
     @Default(.autoScrollToNextEvent) var autoScrollToNextEvent
+    @Default(.calendarApp) private var calendarApp
+    @Default(.notionCalendarAccountEmails) private var notionCalendarAccountEmails
+
+    private var calendarAccounts: [CalendarModel] {
+        Dictionary(grouping: calendarManager.eventCalendars, by: \.accountID)
+            .compactMap { $0.value.first }
+            .sorted { $0.account.localizedCaseInsensitiveCompare($1.account) == .orderedAscending }
+    }
 
     var body: some View {
         Form {
@@ -731,18 +726,53 @@ struct CalendarSettings: View {
             Defaults.Toggle(key: .showFullEventTitles) {
                 Text("Always show full event titles")
             }
+            Section("Open calendars in") {
+                Picker("Calendar application", selection: $calendarApp) {
+                    ForEach(CalendarApp.allCases, id: \.self) { app in
+                        Text(app.rawValue).tag(app)
+                    }
+                }
+                Button("Open \(calendarApp.rawValue)") {
+                    calendarManager.openCalendarApp()
+                }
+                if let error = calendarManager.calendarOpenError {
+                    Text(error).foregroundStyle(.orange)
+                }
+            }
+            if calendarApp == .notion {
+                Section("Notion Calendar connection") {
+                    Text("Sync the same Google/iCloud accounts with macOS and Notion Calendar, then select calendars below.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(calendarAccounts, id: \.accountID) { account in
+                        TextField("Notion account email — \(account.account)", text: Binding(
+                            get: { notionCalendarAccountEmails[account.accountID] ?? "" },
+                            set: { notionCalendarAccountEmails[account.accountID] = $0 }
+                        ), prompt: Text("Email used in Notion Calendar"))
+                        .help("Use this account’s email in Notion Calendar. If events do not report an email, this is needed for event links; otherwise they open in Apple Calendar.")
+                        .autocorrectionDisabled()
+                    }
+                    Text("Events without an account email or original ID open Apple Calendar. Notion database dates, tokens and passwords are not read.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
             Section(header: Text("Calendars")) {
                 if calendarManager.calendarAuthorizationStatus != .fullAccess {
-                    Text("Calendar access is denied. Please enable it in System Settings.")
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                    Button("Open Calendar Settings") {
-                        if let settingsURL = URL(
-                            string:
-                                "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"
-                        ) {
-                            NSWorkspace.shared.open(settingsURL)
+                    Text(calendarManager.calendarAuthorizationStatus == .writeOnly
+                         ? "Add Only cannot read events. Choose Full Access in System Settings › Privacy & Security › Calendars."
+                         : "Allow Browww to read the calendars synced with macOS.")
+                        .foregroundStyle(.secondary)
+                    if calendarManager.calendarAuthorizationStatus == .notDetermined {
+                        Button("Allow calendar access") {
+                            Task { await calendarManager.checkCalendarAuthorization() }
+                        }
+                    } else {
+                        Button("Open Calendar Privacy Settings") {
+                            if let settingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                                NSWorkspace.shared.open(settingsURL)
+                            }
                         }
                     }
                 } else {
@@ -759,7 +789,12 @@ struct CalendarSettings: View {
                                     }
                                 )
                             ) {
-                                Text(calendar.title)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(calendar.title)
+                                    Text(calendar.account)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             .accentColor(lighterColor(from: calendar.color))
                             .disabled(!showCalendar)
@@ -769,16 +804,17 @@ struct CalendarSettings: View {
             }
             Section(header: Text("Reminders")) {
                 if calendarManager.reminderAuthorizationStatus != .fullAccess {
-                    Text("Reminder access is denied. Please enable it in System Settings.")
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                    Button("Open Reminder Settings") {
-                        if let settingsURL = URL(
-                            string:
-                                "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"
-                        ) {
-                            NSWorkspace.shared.open(settingsURL)
+                    Text("Allow Browww to read reminders if you want them in your agenda.")
+                        .foregroundStyle(.secondary)
+                    if calendarManager.reminderAuthorizationStatus == .notDetermined {
+                        Button("Allow reminder access") {
+                            Task { await calendarManager.checkReminderAuthorization() }
+                        }
+                    } else {
+                        Button("Open Reminder Privacy Settings") {
+                            if let settingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders") {
+                                NSWorkspace.shared.open(settingsURL)
+                            }
                         }
                     }
                 } else {
@@ -806,10 +842,12 @@ struct CalendarSettings: View {
         }
         .accentColor(.effectiveAccent)
         .navigationTitle("Calendar")
+        .onChange(of: calendarApp) {
+            calendarManager.calendarOpenError = nil
+        }
         .onAppear {
             Task {
-                await calendarManager.checkCalendarAuthorization()
-                await calendarManager.checkReminderAuthorization()
+                await calendarManager.reloadCalendarAndReminderLists()
             }
         }
     }
@@ -834,8 +872,6 @@ func lighterColor(from nsColor: NSColor, amount: CGFloat = 0.14) -> Color {
 
 struct About: View {
     @State private var showBuildNumber: Bool = false
-    let updaterController: SPUStandardUpdaterController
-    @Environment(\.openWindow) var openWindow
     var body: some View {
         VStack {
             Form {
@@ -865,12 +901,15 @@ struct About: View {
                     Text("Version info")
                 }
 
-                UpdaterSettingsView(updater: updaterController.updater)
+                Section("Updates") {
+                    Text("This personal build does not install upstream Boring Notch updates.")
+                        .foregroundStyle(.secondary)
+                }
 
                 HStack(spacing: 30) {
                     Spacer(minLength: 0)
                     Button {
-                        if let url = URL(string: "https://github.com/TheBoredTeam/boring.notch") {
+                        if let url = URL(string: "https://github.com/lemonleks/browww") {
                             NSWorkspace.shared.open(url)
                         }
                     } label: {
@@ -898,13 +937,6 @@ struct About: View {
             }
             .frame(maxWidth: .infinity, alignment: .center)
         }
-        .toolbar {
-            //            Button("Welcome window") {
-            //                openWindow(id: "onboarding")
-            //            }
-            //            .controlSize(.extraLarge)
-            CheckForUpdatesView(updater: updaterController.updater)
-        }
         .navigationTitle("About")
     }
 }
@@ -929,9 +961,6 @@ struct Shelf: View {
             Section {
                 Defaults.Toggle(key: .boringShelf) {
                     Text("Enable shelf")
-                }
-                Defaults.Toggle(key: .openShelfByDefault) {
-                    Text("Open shelf by default if items are present")
                 }
                 Defaults.Toggle(key: .expandedDragDetection) {
                     Text("Expanded drag detection area")

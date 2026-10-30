@@ -18,12 +18,10 @@ struct ShelfView: View {
     var body: some View {
         HStack(spacing: 12) {
             FileShareView()
-                .aspectRatio(1, contentMode: .fit)
+                .frame(width: 144)
+                .frame(maxHeight: .infinity)
                 .environmentObject(vm)
             panel
-                .onDrop(of: [.fileURL, .url, .utf8PlainText, .plainText, .data], isTargeted: $vm.dragDetectorTargeting) { providers in
-                    handleDrop(providers: providers)
-                }
         }
         // Bind Quick Look to shelf selection
         .onChange(of: selection.selectedIDs) {
@@ -59,39 +57,24 @@ struct ShelfView: View {
     }
 
     var panel: some View {
-        RoundedRectangle(cornerRadius: 16)
-            .stroke(
-                vm.dragDetectorTargeting
-                    ? Color.accentColor.opacity(0.9)
-                    : Color.white.opacity(0.1),
-                style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [10])
-            )
-            .overlay {
-                content
-                    .padding()
-            }
-            .transaction { transaction in
-                transaction.animation = vm.animation
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { selection.clear() }
+        ShelfDropSurface(isTargeted: vm.dragDetectorTargeting) {
+            content
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture { selection.clear() }
+        .onDrop(of: [.fileURL, .url, .utf8PlainText, .plainText, .data], isTargeted: $vm.dragDetectorTargeting) { providers in
+            handleDrop(providers: providers)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Shelf storage")
+        .accessibilityHint("Drop files or links here to keep them in Shelf.")
+        .help("Drop files or links to keep them in Shelf")
     }
 
     var content: some View {
         Group {
             if tvm.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: "tray.and.arrow.down")
-                        .symbolVariant(.fill)
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(.white, .gray)
-                        .imageScale(.large)
-                    
-                    Text("Drop files here")
-                        .foregroundStyle(.gray)
-                        .font(.system(.title3, design: .rounded))
-                        .fontWeight(.medium)
-                }
+                Self.emptyState(isTargeted: vm.dragDetectorTargeting)
             } else {
                 ScrollView(.horizontal) {
                     HStack(spacing: spacing) {
@@ -111,5 +94,50 @@ struct ShelfView: View {
         .onAppear {
             ShelfStateViewModel.shared.cleanupInvalidItems()
         }
+    }
+
+    static func emptyState(isTargeted: Bool) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "tray.and.arrow.down")
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
+                .imageScale(.large)
+            Text(isTargeted ? "Drop to add to Shelf" : "Shelf")
+                .foregroundStyle(.primary)
+                .font(.system(size: 13, weight: .semibold))
+            Text(isTargeted
+                 ? "Release to keep the item here."
+                 : "Drop files or links to keep them here.\nDrag out or select an item to share.")
+                .foregroundStyle(.secondary)
+                .font(.system(size: 11))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct ShelfDropSurface<Content: View>: View {
+    let isTargeted: Bool
+    private let content: Content
+
+    init(isTargeted: Bool, @ViewBuilder content: () -> Content) {
+        self.isTargeted = isTargeted
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isTargeted ? Color.accentColor.opacity(0.16) : Color.white.opacity(0.055))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(isTargeted ? Color.accentColor.opacity(0.8) : Color.white.opacity(0.12), lineWidth: 1)
+                    }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

@@ -5,7 +5,7 @@ import AsyncXPCConnection
 final class XPCHelperClient: NSObject {
     nonisolated static let shared = XPCHelperClient()
     
-    private let serviceName = "theboringteam.boringnotch.BoringNotchXPCHelper"
+    private let serviceName = "local.browww.BoringNotchXPCHelper"
     
     private var remoteService: RemoteXPCService<BoringNotchXPCHelperProtocol>?
     private var connection: NSXPCConnection?
@@ -145,6 +145,23 @@ final class XPCHelperClient: NSObject {
             return false
         }
     }
+    @MainActor
+    func fetchOmpUsage(binaryPath: String, force: Bool) async throws -> String {
+        let service = ensureRemoteService()
+        return try await service.withContinuation { service, continuation in
+            service.fetchOmpUsage(binaryPath, force: force) { output, error in
+                if let output {
+                    continuation.resume(returning: output)
+                } else {
+                    continuation.resume(throwing: NSError(
+                        domain: "Browww.OmpUsage", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: error ?? "OMP helper is unavailable. Restart Browww."]
+                    ))
+                }
+            }
+        }
+    }
+
     
     // MARK: - Keyboard Brightness
     

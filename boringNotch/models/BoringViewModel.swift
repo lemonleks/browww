@@ -22,8 +22,14 @@ class BoringViewModel: NSObject, ObservableObject {
     @Published var dragDetectorTargeting: Bool = false
     @Published var generalDropTargeting: Bool = false
     @Published var dropZoneTargeting: Bool = false
+    @Published var expandedDragTargeting: Bool = false
     @Published var dropEvent: Bool = false
     @Published var anyDropZoneTargeting: Bool = false
+    @Published var isShelfDragPreviewing: Bool = false
+
+    var displayedView: NotchViews {
+        isShelfDragPreviewing && Defaults[.boringShelf] ? .shelf : coordinator.currentView
+    }
     var cancellables: Set<AnyCancellable> = []
     
     @Published var hideOnClosed: Bool = true
@@ -31,11 +37,13 @@ class BoringViewModel: NSObject, ObservableObject {
     @Published var edgeAutoOpenActive: Bool = false
     @Published var isHoveringCalendar: Bool = false
     @Published var isBatteryPopoverActive: Bool = false
+    @Published var isEditingUsageConfiguration: Bool = false
 
     @Published var screenUUID: String?
 
     @Published var notchSize: CGSize = getClosedNotchSize()
     @Published var closedNotchSize: CGSize = getClosedNotchSize()
+    private var usageContentHeight: CGFloat?
     
     let webcamManager = WebcamManager.shared
     @Published var isCameraExpanded: Bool = false
@@ -59,11 +67,26 @@ class BoringViewModel: NSObject, ObservableObject {
         notchSize = getClosedNotchSize(screenUUID: screenUUID)
         closedNotchSize = notchSize
 
-        Publishers.CombineLatest3($dropZoneTargeting, $dragDetectorTargeting, $generalDropTargeting)
-            .map { shelf, drag, general in
-                shelf || drag || general
+        Publishers.CombineLatest4($dropZoneTargeting, $dragDetectorTargeting, $generalDropTargeting, $expandedDragTargeting)
+            .map { shelf, drag, general, expanded in
+                shelf || drag || general || expanded
             }
             .assign(to: \.anyDropZoneTargeting, on: self)
+            .store(in: &cancellables)
+
+        Publishers.CombineLatest3(
+            coordinator.$currentView, $isShelfDragPreviewing,
+            Defaults.publisher(.boringShelf).map(\.newValue)
+        )
+            .map { selected, preview, shelfEnabled in
+                preview && shelfEnabled ? .shelf : selected
+            }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] view in
+                guard let self, self.notchState == .open else { return }
+                self.notchSize = self.sizeForOpenView(view)
+            }
             .store(in: &cancellables)
         
         setupDetectorObserver()
@@ -188,9 +211,36 @@ class BoringViewModel: NSObject, ObservableObject {
         
         return false
     }
+    func clearDropTargeting() {
+        expandedDragTargeting = false
+        dragDetectorTargeting = false
+        generalDropTargeting = false
+        dropZoneTargeting = false
+    }
+
+
+    func sizeForOpenView(_ view: NotchViews) -> CGSize {
+        if view == .timer { return sessionTimerNotchSize }
+        guard view == .usage else { return openNotchSize }
+        guard let usageContentHeight else { return usageNotchSize }
+        let chromeHeight = max(openNotchHeaderMinHeight, effectiveClosedNotchHeight)
+            + openNotchSpacing + openNotchPadding
+        return CGSize(
+            width: usageNotchSize.width,
+            height: min(usageNotchSize.height, ceil(usageContentHeight + chromeHeight))
+        )
+    }
+
+    func updateUsageContentHeight(_ height: CGFloat) {
+        guard height > 0, usageContentHeight != height else { return }
+        usageContentHeight = height
+        if notchState == .open && displayedView == .usage {
+            notchSize = sizeForOpenView(.usage)
+        }
+    }
 
     func open() {
-        self.notchSize = openNotchSize
+        self.notchSize = sizeForOpenView(displayedView)
         self.notchState = .open
         
         // Force music information update when notch is opened
@@ -205,17 +255,11 @@ class BoringViewModel: NSObject, ObservableObject {
         self.notchSize = getClosedNotchSize(screenUUID: self.screenUUID)
         self.closedNotchSize = self.notchSize
         self.notchState = .closed
+        self.isShelfDragPreviewing = false
         self.isBatteryPopoverActive = false
+        self.isEditingUsageConfiguration = false
         self.coordinator.sneakPeek.show = false
         self.edgeAutoOpenActive = false
-
-        // Set the current view to shelf if it contains files and the user enables openShelfByDefault
-        // Otherwise, if the user has not enabled openLastShelfByDefault, set the view to home
-    if !ShelfStateViewModel.shared.isEmpty && Defaults[.openShelfByDefault] {
-            coordinator.currentView = .shelf
-        } else if !coordinator.openLastTabByDefault {
-            coordinator.currentView = .home
-        }
     }
 
     func closeHello() {
